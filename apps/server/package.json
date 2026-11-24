@@ -7,8 +7,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "tsc -b && node dist/server.js",
-    "sandbox": "tsc -b && node dist/modules/sandbox/index.js"
+    "dev": "tsc -b && node dist/server.js"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

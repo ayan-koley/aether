@@ -1,121 +1,126 @@
-# Architecture
+# Aether Architecture
 
-## 1. Principles
-1. **One orchestrator, many capabilities.** Orchestrator owns task state; capabilities do the work.
-2. **Providers on demand.** No Docker unless code must run.
-3. **Workspace is the source of truth.** Sandboxes are disposable.
-4. **Policy before execution.** Model output is an untrusted proposal; server policy decides.
-5. **Evidence-based completion.** Done only when tests/checks prove success criteria.
-6. **Recoverable.** State, events, and checkpoints are persisted.
-7. **Provider abstraction.** Orchestrator never depends on Docker directly.
+## 1. Goal
 
-## 2. Components
+Aether turns a user's natural-language request into a running React website. The user can view the result, send follow-up prompts and ask Aether to modify the existing project.
 
-| Component | Tech | Role |
+Aether is a focused website-generation agent, not a general-purpose autonomous software engineering platform.
+
+## 2. Technology
+
+| Layer | Technology | Responsibility |
 |---|---|---|
-| Web client | React + Vite (SPA), TS | Task composer, timeline, file explorer/editor, logs, approvals. REST + SSE. |
-| API | Express, TS, Zod | Auth, validation, rate limits, task/project/artifact APIs, SSE. Never runs untrusted code. |
-| Worker | BullMQ + Redis | Runs the task state machine and agent loop. |
-| Agent core | in worker | Planner, capability router, tool router, evaluator, repairer, context manager. |
-| Capabilities | modules | Coding (MVP); browser, data, documents, automation later. |
-| Providers | modules | Direct, Docker code, browser, document, data. |
-| Workspace service | module | Versioned files, changesets, sync, export. |
-| Postgres | Drizzle | Metadata, state, events, audit. |
-| Object storage | S3 / MinIO | File blobs, logs, exports, artifacts. |
-| Redis | | Queue, locks, rate limits, event notifications. Not a source of truth. |
-| Observability | OpenTelemetry | Logs, metrics, traces. |
+| Web client | React, Vite, TypeScript | Chat, project dashboard and preview |
+| API | Node.js, Express, TypeScript | Authenticates requests and coordinates work |
+| LLM | Gemini API, `@google/genai` | Plans code changes and diagnoses errors |
+| Sandbox | E2B, `e2b` SDK | Isolated filesystem, terminal and running app |
+| Database | PostgreSQL, Prisma | Users, projects, conversations and execution metadata |
 
-Start as a modular monolith (separate API and worker processes).
+## 3. Main components
 
-```mermaid
-flowchart TD
-  UI[React SPA] --> API[Express API]
-  API --> DB[(Postgres)]
-  API --> Q[(Redis/BullMQ)]
-  Q --> ORCH[Orchestrator]
-  ORCH --> PLAN[Planner]
-  ORCH --> ROUTER[Capability Router]
-  ORCH --> TOOLS[Policy + Tool Registry]
-  ORCH --> EVAL[Evaluator/Repairer]
-  ROUTER --> CODING[Coding] --> RUNNER[Sandbox Runner] --> DOCKER[Docker/gVisor]
-  ROUTER -.later.-> WEB[Browser]
-  ROUTER -.later.-> DOCS[Documents]
-  ORCH --> WS[Workspace Service]
-  WS --> OBJ[(Object Storage)]
-  WS --> DB
-  ORCH -->|events| DB
-  DB -->|replay| SSE[SSE] --> UI
-  ORCH -->|notify| Q
-  Q -->|notify| SSE
+### React frontend
+
+The frontend sends prompts to the backend, displays execution progress and embeds the preview URL returned by the backend. It never receives Gemini or E2B secret keys.
+
+### Express backend
+
+The backend is the control plane. It validates requests, loads project context, calls Gemini, validates the returned plan, invokes sandbox operations and stores status/results.
+
+### Prompt processor
+
+Builds a bounded prompt containing:
+- User request.
+- Selected project metadata.
+- Relevant file tree and file contents when needed.
+- Recent conversation context.
+- A strict output schema and safety rules.
+
+Do not send the entire project to Gemini on every turn. Select relevant files and summarize the rest.
+
+### Gemini agent
+
+Gemini returns a structured plan. It does not directly access the server, database or sandbox. The backend validates every operation before execution.
+
+### Execution engine
+
+Accepts only supported operations, for example:
+- `write_file`
+- `edit_file`
+- `delete_file`
+- `install_packages`
+- `run_command`
+- `start_dev_server`
+
+Validate paths, operation types, package names and commands. Reject paths that escape the project directory and commands outside the allowed policy.
+
+### Sandbox manager
+
+Creates one E2B sandbox for a project, prepares the React + Vite workspace, performs file operations and runs commands. Store the E2B sandbox identifier and lifecycle state in the database.
+
+### Preview manager
+
+Starts the Vite development server on its configured port (normally `5173`) bound to `0.0.0.0`, waits for readiness, then obtains the public host URL using the E2B SDK. Return the URL to the frontend.
+
+### Error recovery
+
+Collects build or startup errors, sends the relevant error plus affected file context to Gemini, validates the proposed repair plan and retries a limited number of times. Stop and show the error when the retry limit is reached.
+
+## 4. Request flow
+
+```text
+React UI
+  |
+  | POST prompt + projectId
+  v
+Express API
+  |
+  +--> Load project and conversation
+  |
+  +--> Prompt processor
+  |
+  +--> Gemini: generate structured plan
+  |
+  +--> Validate plan
+  |
+  +--> Execution engine
+  |      |
+  |      +--> E2B sandbox: write files / install packages / run commands
+  |
+  +--> Start or verify Vite server
+  |
+  +--> Save result and preview URL
+  |
+  v
+React UI displays live preview
 ```
 
-## 3. Key mechanisms
+For a follow-up request, use the existing project sandbox and current files. Do not create a fresh project unless the user explicitly starts a new project.
 
-**Task creation is a two-system write (Postgres + Redis).** Insert the task in Postgres first, then enqueue with BullMQ `jobId = taskId` (idempotent). A reconciler every ~30s re-enqueues tasks stuck in `QUEUED`. Redis loss then never loses a task.
+## 5. Project and sandbox lifecycle
 
-**Events.** Worker writes the event to Postgres (sequence from `tasks.last_event_seq`, same transaction as the state change), then notifies via Redis pub/sub. SSE replays from Postgres using `Last-Event-ID`, then tails notifications.
+1. Create a project record.
+2. Create an E2B sandbox and record its ID.
+3. Initialize the React + Vite starter project in the sandbox.
+4. Generate and execute the first implementation plan.
+5. Start the Vite server and return the preview URL.
+6. Keep the sandbox associated with the project while it is active.
+7. On later prompts, resume or reconnect to the existing sandbox and modify its files.
+8. Pause or destroy inactive sandboxes according to a defined lifecycle policy.
 
-**Worker leases.** A running task holds a lease (`lease_owner`, `lease_expires_at`) renewed by heartbeat. Expired leases are reclaimed and resumed from the last checkpoint.
+Sandbox lifetime and persistence are provider-controlled. Do not assume a sandbox or its filesystem lasts forever. Before production use, implement a durable project backup/export strategy.
 
-**Cancellation.** API sets `cancel_requested_at` and signals Redis. Worker checks between steps, kills the sandbox, then marks `CANCELLED`.
+## 6. Security boundaries
 
-**Auth.** Use a managed auth provider with cookie sessions (browser `EventSource` can't send auth headers). Because the React SPA is a separate app, serve it and the API under one origin (reverse proxy, or Vite dev proxy locally) so cookies are same-site. Use `HttpOnly`, `Secure`, `SameSite=Lax` cookies plus CSRF protection on state-changing routes.
+- Keep `GEMINI_API_KEY`, `E2B_API_KEY` and `DATABASE_URL` on the backend only.
+- Never execute raw model output as shell input.
+- Validate model output against a schema and an allowlist of operations.
+- Restrict file paths to the project workspace.
+- Apply command timeouts, output limits and dependency-install limits.
+- Keep generated applications isolated from the Aether backend.
+- Do not expose internal service credentials to generated applications.
+- Treat user prompts, generated code, terminal output and project files as untrusted input.
+- Apply authentication, project ownership checks and request limits before public launch.
 
-**Express notes.** Express has no built-in validation or async error handling: wrap every route in a validate-with-Zod middleware, use one central error handler returning the standard error shape, and keep handlers thin (logic in service modules) so the framework stays swappable. For SSE, disable response buffering/compression and send heartbeat comments every ~15s.
+## 7. Deliberately out of scope for the first version
 
-## 4. Workspace model
-- **Project workspace:** versioned files, owned by a user.
-- **Task working copy:** snapshot copied into the sandbox.
-- **Changeset:** create/update/delete operations with hashes, diffed from the working copy against the base snapshot.
-- **Sync:** validate (paths, sizes, types) → apply as a new immutable version using compare-and-swap on the project's current version.
-- **Conflicts:** if the project moved since the base version, apply only if changed paths don't overlap; otherwise mark the changeset `conflicted`, keep it, and let the user decide. No auto-merge in MVP.
-- **Blobs:** content-addressed per project (`projects/{id}/blobs/{sha256}`).
-
-## 5. Sandbox model
-- Files are copied in and out (tar with size limits). No host bind mounts. Reject symlinks that escape.
-- **Install phase:** network only through an allowlisted package proxy; `--ignore-scripts` by default.
-- **Run/test phase:** network off.
-- Non-root, read-only root FS where practical, CPU/memory/PID/disk/time limits.
-- No Docker socket or secrets inside. LLM keys stay in the worker, never in the sandbox.
-- **Where it runs:** the worker should not hold a Docker socket on a shared host. Use a small sandbox-runner service on a dedicated host (or rootless Docker). Local dev can use plain Docker.
-- **Before outside users:** gVisor or Firecracker, plus quotas.
-
-## 6. Security
-- Tenant checks on every project, task, file, artifact route; add Postgres RLS where practical.
-- Tool calls are validated by schema, permission, path, network, budget.
-- Treat all tool output, file contents, and web content as untrusted (prompt-injection risk).
-- Secrets only in a secrets manager; short-lived scoped credentials if ever needed.
-- Approvals for destructive, external, costly, or deploy actions. An approval is bound to the exact action (hash) and expires.
-- Audit tool calls, approvals, workspace changes, external effects.
-
-## 7. Agent reliability rules
-- Evaluator compares evidence to the plan's success criteria; "tests passed" requires tests actually ran.
-- Repairer may not delete, skip, or weaken tests to pass; such changes are flagged.
-- Same error signature twice → stop and report.
-- Prompt and model versions are recorded per run. A golden-task eval suite gates prompt/model changes.
-
-## 8. Tech choices
-
-| Area | Choice |
-|---|---|
-| Frontend | React.js + Vite, TypeScript, Tailwind, React Router, TanStack Query |
-| API | Express, TypeScript, Zod (validation middleware), Pino + pino-http (logs, request IDs), helmet, express-rate-limit |
-| Orchestration | Custom state machine |
-| LLM | Provider adapter, structured outputs |
-| Queue | Redis + BullMQ |
-| DB | Postgres + Drizzle |
-| Code execution | Docker (Node.js 22 image) |
-| Storage | S3-compatible (MinIO locally) |
-| Tests | Vitest + provider integration tests |
-| Observability | OpenTelemetry |
-
-## 9. MVP scope
-1. Create project and task.
-2. Build/modify a Node.js project.
-3. Run in limited Docker sandbox.
-4. Capture logs and test results.
-5. Bounded repair.
-6. Sync to persistent workspace.
-7. Browse/edit files, download ZIP.
-
-Post-MVP: Python/FastAPI, live preview, browser research, data, documents, GitHub, deployment.
+Redis, BullMQ, distributed workers, microservices, Kubernetes, multi-agent orchestration and support for multiple frameworks. Add infrastructure only when measured usage requires it.

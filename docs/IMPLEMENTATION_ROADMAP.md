@@ -1,126 +1,99 @@
-# Implementation Roadmap
+# Aether Implementation Roadmap
 
-## Direction
-One general autonomous agent with capability-dependent providers. MVP = Node.js project generation and repair. Python/FastAPI, live preview, and other capabilities come after.
+Build and verify one milestone at a time. Do not start the next milestone until the previous one works.
 
-## Rules
-- Ship a thin end-to-end slice first.
-- Modular monolith: API, worker, and modules separate in code.
-- No Docker for tasks that don't need it.
-- Workspace files live outside sandboxes.
-- Security is built in each milestone, not saved for M6.
-- **No outside users before M6 is done.**
+## Milestone 1 — Monorepo foundation
 
-## M0 decisions (write down before coding)
-Auth provider · LLM provider/model · where sandboxes run · per-task cost cap · editor component (Monaco or simpler).
+- [ done ] Create the `aether` repository.
+- [ done ] Configure npm workspaces for `apps/web`, `apps/server` and `packages/shared`.
+- [ ! ] Create React + Vite + TypeScript frontend.
+- [ done ] Create Express + TypeScript backend.
+- [ done ] Add environment-variable validation.
+- [ done ] Add `/api/health`.
+- [ done ] Confirm both apps run locally.
 
-## Milestones
+**Done when:** React can call the Express health endpoint.
 
-### M0 — Foundation
-- pnpm TS monorepo (React + Vite web, Express API), lint, format, Zod, Vitest, env validation.
-- Express base: Zod validation middleware, central error handler, Pino request logging, helmet, rate limits.
-- Docker Compose: Postgres, Redis, MinIO.
-- Structured logs, request IDs, auth integration.
-- CI: lint + tests.
+## Milestone 2 — E2B proof of concept
 
-**Done when:** API and web start locally, migrations run, CI green, login works.
+- [ done ] Initialize vercel sandbox SDK.
+- [ done ] Create a sandbox from the backend.
+- [ done ] Create a minimal React + Vite project in the sandbox.
+- [ done ] Install dependencies.
+- [ done ] Start Vite on `0.0.0.0:5173`.
+- [ done ] Wait for readiness and retrieve the sandbox host URL.
+- [ done ] Display the URL in a browser.
 
-### M1 — Projects and workspace
-- Schema: users, projects, tasks, workspace_versions/files, audit_logs.
-- Object-storage adapter, content-addressed blobs.
-- File list/read/save with path normalization, authorization, compare-and-swap versioning.
-- Version list, restore, ZIP export.
+**Done when:** A website created inside E2B is reachable through its preview URL.
 
-**Done when (via API, no UI yet):** create project, add/edit/list files, export ZIP, restore a version; data survives restarts; path-traversal and cross-tenant tests pass.
+## Milestone 3 — Sandbox manager and execution engine
 
-### M2 — Sandbox provider *(can run in parallel with M3)*
-- Node.js 22 image, runtime registry (`node22`).
-- Container manager: non-root, CPU/mem/PID/disk/time limits, read-only root FS where practical.
-- Copy-in/copy-out of files (no host mounts).
-- **Package proxy with allowlist; install phase with scripts off; run phase offline.**
-- stdout/stderr capture, cleanup, cancellation.
+- [ ] Implement sandbox create/get/pause/destroy operations.
+- [ ] Implement safe file read/write operations.
+- [ ] Implement bounded command execution and log capture.
+- [ ] Implement project-root path validation.
+- [ ] Implement dependency installation with limits.
+- [ ] Save sandbox ID and project status.
 
-**Done when:** a hand-written project installs, tests, and runs; timeout and memory limits trigger; no Docker socket, secrets, or host mounts present; offline run phase can't reach the network.
+**Done when:** The backend can create, edit and run a website without Gemini.
 
-### M3 — LLM and agent core *(can run in parallel with M2)*
-- LLM adapter, structured plan/file-operation/evaluation schemas.
-- Planner, context manager, tool registry with server-side policy.
-- Prompt versions, `tool_invocations`, `usage_records`.
-- **Eval harness with ~20 golden tasks and a pass-rate/cost/time report.**
+## Milestone 4 — Gemini integration
 
-**Done when:** valid plans and file ops for sample tasks; invalid tool calls rejected; eval harness runs.
+- [ ] Install `@google/genai`.
+- [ ] Keep the Gemini API key on the backend.
+- [ ] Define a versioned JSON plan schema with Zod.
+- [ ] Add prompt construction and project context selection.
+- [ ] Ask Gemini for structured file-operation plans.
+- [ ] Parse and validate every response.
+- [ ] Reject unsupported or unsafe operations.
 
-### M4 — Coding agent loop
-- BullMQ worker, state machine, checkpoints, leases, reconciler, dead-letter queue.
-- Generate → run → observe → evaluate → bounded repair.
-- Loop detection and test-tampering flags.
-- Changesets, sync with conflict handling, cancellation, failure reports.
-- Events in Postgres + SSE; OpenTelemetry traces and basic cost/duration dashboards.
+**Done when:** A prompt produces a valid plan that the backend can inspect safely.
 
-**Done when:** "Build a Fastify To-Do API" succeeds, including recovery from a real injected failure; worker-kill test resumes from checkpoint; cancel works; project downloadable after sandbox cleanup; golden-task pass rate recorded as a baseline.
+## Milestone 5 — End-to-end generation
 
-### M5 — User workspace UI
-- Task dashboard, live timeline, log panel.
-- File explorer and editor, approvals and input prompts.
-- Artifact list, ZIP download, version history and restore.
+- [ ] Connect Gemini plans to the execution engine.
+- [ ] Create a project sandbox on the first request.
+- [ ] Execute the plan.
+- [ ] Run a production build check.
+- [ ] Start or verify the development server.
+- [ ] Persist messages and execution status.
+- [ ] Return a working preview URL.
 
-**Done when:** a user can submit a task, follow it, inspect and edit files, resolve a conflict, and download the project.
+**Done when:** A user prompt creates a working website and the UI displays it.
 
-### M6 — Security and operations
-- Threat model and abuse cases.
-- Dedicated sandbox host; gVisor or Firecracker decision.
-- Quotas, rate limits, audit review, secrets isolation.
-- Backups/restore, retention, alerts (worker crash, backlog, cost spike, suspicious sandbox activity).
+## Milestone 6 — Conversational editing
 
-**Done when:** tests cover path traversal, tenant isolation, archive extraction, resource exhaustion, unauthorized artifact access, malicious dependencies, and egress blocking; restart and cancel integration tests pass.
+- [ ] Load the existing sandbox for follow-up prompts.
+- [ ] Collect the current file tree and relevant files.
+- [ ] Include recent conversation context.
+- [ ] Generate minimal change plans.
+- [ ] Apply changes without replacing unrelated files.
+- [ ] Refresh the preview after successful changes.
 
-### M7 — More capabilities (one at a time)
-1. Python 3.12 + FastAPI provider.
-2. Live app preview (secure port proxy).
-3. Documents.
-4. Browser research (domain policy).
-5. Data analysis.
-6. GitHub sync.
-7. Deployment with approval gates.
+**Done when:** A follow-up prompt changes the existing website and preserves previous work.
 
-**Each needs:** typed I/O, permission scopes, tests, audit events, documented limits.
+## Milestone 7 — Error recovery
 
-### M8 — Production scale
-Separate API/workers/execution hosts, autoscaling, backpressure, org quotas, cost dashboards, DR drills, load tests, SLOs.
+- [ ] Capture install, build and server errors.
+- [ ] Send bounded error context to Gemini.
+- [ ] Validate the proposed repair plan.
+- [ ] Retry a maximum of two times initially.
+- [ ] Save final status and a user-friendly error summary.
 
-## Repository layout
-Full file-by-file layout: see `PROJECT_STRUCTURE.md` (it replaces the summary below).
+**Done when:** A common build error can be repaired automatically, with a clear failure state when repair does not work.
 
-```
-apps/      web (React+Vite), api (Express), worker
-packages/  agent-core, capabilities, providers, tool-system,
-           workspace, database, llm, shared
-docker/    node-sandbox
-infrastructure/
-evals/, tests/, scripts/
-```
+## Milestone 8 — Reliability and launch preparation
 
-## Build order
-Storage/file APIs → sandbox by hand → LLM planning → worker + sandbox → evaluate/repair/sync → UI → harden → add capabilities.
+- [ ] Add authentication and project ownership checks.
+- [ ] Add rate limits, timeouts and request-size limits.
+- [ ] Add sandbox inactivity and cleanup policy.
+- [ ] Add durable project export/backup.
+- [ ] Add tests for plan validation and sandbox operations.
+- [ ] Review sandbox network access and secret isolation.
+- [ ] Add usage limits and cost monitoring.
 
-## MVP is done when a user can
-- Create a project and submit a coding task.
-- Watch progress and logs.
-- Get a generated Node.js project.
-- View and edit files.
-- Download a ZIP and run it locally.
-- See test evidence or a clear failure reason.
+**Done when:** Users cannot access each other's projects, execution is bounded and project files can survive sandbox expiration.
 
-## Progress
+## Not in the initial roadmap
 
-| Milestone | Status | Notes |
-|---|---|---|
-| M0 Foundation | Not started | |
-| M1 Workspace | Not started | |
-| M2 Sandbox | Not started | |
-| M3 Agent core | Not started | |
-| M4 Coding loop | Not started | |
-| M5 UI | Not started | |
-| M6 Security/ops | Not started | |
-| M7 Capabilities | Not started | |
-| M8 Scale | Not started | |
+Do not add Redis, BullMQ, microservices, Kubernetes, multi-agent orchestration or multiple generated frameworks until a real requirement justifies them.

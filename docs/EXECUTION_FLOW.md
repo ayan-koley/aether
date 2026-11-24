@@ -1,106 +1,98 @@
-# Agent and Execution Flow
+# Aether Execution Flow
 
-## 1. Task states
+## 1. New project generation
 
-```
-QUEUED → CLASSIFYING → PLANNING → [WAITING_FOR_APPROVAL] → RUNNING → EVALUATING → SYNCING → COMPLETED
-```
+1. The user creates a project and submits a website prompt from React.
+2. The API validates the request and checks project ownership.
+3. The backend creates a project record and conversation.
+4. The sandbox module creates an E2B sandbox and initializes a React + Vite starter.
+5. The prompt processor prepares the user request, starter-project context and required plan schema.
+6. The Gemini agent requests a structured implementation plan.
+7. The backend parses and validates the plan.
+8. The execution engine applies approved file and package operations inside E2B.
+9. The backend runs the build command and starts the Vite development server.
+10. The preview manager checks readiness and obtains the E2B host URL.
+11. The backend saves execution status and preview metadata.
+12. The frontend displays the preview.
 
-| State | Meaning |
-|---|---|
-| `WAITING_FOR_INPUT` | Agent needs a user answer (via `POST /tasks/:id/input`) |
-| `WAITING_FOR_APPROVAL` | Needs an approval decision |
-| `REPAIRING` | Bounded repair after a failed evaluation (loops back to `RUNNING`) |
-| `CANCELLATION_REQUESTED` | User cancelled; waiting for providers to stop |
-| `CANCELLED`, `FAILED`, `TIMED_OUT`, `COMPLETED` | Terminal |
+## 2. Follow-up modification
 
-- Cleanup is **not a state**. It runs after any terminal status and sets `cleanup_done_at`.
-- Resumable: `WAITING_*`, and `RUNNING`/`REPAIRING` after a worker crash or lease expiry. Terminal states are not resumable except `TIMED_OUT`/`FAILED` by explicit `resume` (re-checks budget, permissions, approvals).
-- Every transition writes the state, a reason, and an event in one transaction. Transitions are idempotent.
+1. The user sends a new prompt for an existing project.
+2. The backend loads the project, conversation and associated sandbox.
+3. The sandbox module reconnects to or resumes the project sandbox.
+4. The backend gathers the file tree and relevant source files.
+5. Gemini returns a change plan, including the files to inspect or modify.
+6. The backend validates and executes the plan.
+7. The backend checks the build and preview server.
+8. The frontend refreshes the preview and displays the result.
 
-## 2. Flow
+Modify the existing project. Do not overwrite the entire project for a small change.
 
-1. **Submit** — prompt, optional project, mode.
-2. **Authorize** — user, quota, project ownership.
-3. **Persist** — task + initial event in Postgres; enqueue with `jobId = taskId`. A reconciler re-enqueues stuck `QUEUED` tasks.
-4. **Classify** — intent, risk, needed capabilities, whether execution is needed.
-5. **Plan** — structured steps, assumptions, measurable success criteria.
-6. **Policy check** — permissions, network, budget, approvals.
-7. **Select provider** — Docker only if code must run.
-8. **Prepare context** — relevant files, workspace version, task working copy.
-9. **Execute** — tools via the policy registry; stream events.
-10. **Observe** — exit codes, test output, files, errors.
-11. **Evaluate** — evidence vs. success criteria.
-12. **Repair or ask** — bounded repair, or pause for input/approval.
-13. **Sync** — validate changeset, apply with version check.
-14. **Deliver** — artifacts, summary, downloads.
-15. **Clean up** — destroy sandbox, revoke credentials, keep logs/artifacts.
+## 3. Plan contract
 
-## 3. Capability examples
+Use a versioned JSON contract and validate it with Zod before execution. A plan should contain an action summary and a list of typed operations. Example:
 
-| Request | Capability | Provider |
-|---|---|---|
-| Explain this error | Reasoning | Direct LLM |
-| Build a Fastify API | Coding | Docker |
-| Research competitors (later) | Browser | Managed browser |
-| Create a PDF report (later) | Documents | Document provider |
-| Analyze a CSV (later) | Data | Data provider |
-
-One task may chain capabilities; only needed outputs pass between steps.
-
-## 4. Example: To-Do API (Node.js)
-1. Select or create project; record workspace version.
-2. Copy snapshot into a restricted Node.js sandbox.
-3. Generate `package.json`, server, routes, tests, README, `.env.example`.
-4. **Install** via package proxy (scripts off).
-5. **Lint/test/health check with network off.**
-6. Capture stdout, stderr, exit code.
-7. On failure, send concise evidence to repairer; retry within limits.
-8. Diff working copy → changeset; validate paths, sizes, types, base version.
-9. Apply as new workspace version.
-10. Show files, offer ZIP, destroy sandbox.
-
-## 5. Repair rules
-- Max repair attempts from budget (server-capped).
-- Stop if the same error signature appears twice.
-- Repairer must not delete, skip, or weaken tests; such edits are flagged and don't count as success.
-- Evaluator requires the tests to have actually run.
-
-## 6. Workspace sync
-- Docker volumes are never permanent storage.
-- Agent records `base_version`. At sync, if the head moved: apply when changed paths don't overlap; otherwise mark changeset `conflicted`, keep it, ask the user.
-- Failed changesets are kept for inspection. Rollback = new version restoring an old one.
-
-## 7. Provider interface
-```ts
-interface ExecutionResult<T = unknown> {
-  status: "succeeded" | "failed" | "timed_out";
-  output?: T;
-  error?: { code: string; message: string };
-  startedAt: string;
-  finishedAt: string;
-}
-
-interface CodeExecutionProvider {
-  createSession(i: { taskId: string; workspaceSnapshotId: string; runtime: string }): Promise<{ sessionId: string }>;
-  execute(i: { sessionId: string; command: string; timeoutMs: number; network: "none" | "package-proxy" }): Promise<ExecutionResult>;
-  terminate(i: { sessionId: string }): Promise<void>;
+```json
+{
+  "version": 1,
+  "summary": "Create a responsive SaaS landing page",
+  "operations": [
+    {
+      "type": "write_file",
+      "path": "src/App.tsx",
+      "content": "..."
+    },
+    {
+      "type": "write_file",
+      "path": "src/App.css",
+      "content": "..."
+    },
+    {
+      "type": "install_packages",
+      "packages": ["lucide-react"]
+    }
+  ]
 }
 ```
-Other providers get their own interfaces.
 
-## 8. Retry, budget, recovery
-- Budgets: repairs, wall time, tokens/cost, tool calls, sandbox resources.
-- Retry only transient failures, with backoff; repeated failures go to a dead-letter queue.
-- Never repeat irreversible external actions without idempotency or approval.
-- Checkpoint before and after side effects (append-only).
-- Worker holds a lease with heartbeat; expired leases are reclaimed and resumed from the last checkpoint.
-- Cancellation: set `cancel_requested_at`, signal worker, worker kills sandbox, then `CANCELLED`.
-- Always record the stop reason: success, cancelled, budget, approval needed, or error.
+This is an example contract, not an instruction to accept arbitrary operations. Define exact Zod schemas for every operation type. Reject unknown operation types and unexpected fields.
 
-## 9. Events
-Persisted in Postgres, delivered over SSE (SSE is not the record).
+## 4. Operation execution rules
 
-Names: `task.status`, `agent.plan.created`, `agent.step.started`, `agent.progress`, `tool.started`, `tool.completed`, `sandbox.stdout`, `sandbox.stderr`, `workspace.changeset.created`, `workspace.synced`, `workspace.conflict`, `input.requested`, `approval.requested`, `artifact.created`, `task.completed`, `task.failed`.
+- Resolve every file path against the sandbox project root and reject traversal outside it.
+- Limit file size, total plan size and number of operations.
+- Allow package installation only through the package-install operation; validate package names and apply timeouts.
+- Allow only explicitly approved command templates. Do not accept arbitrary shell commands directly from Gemini.
+- Capture stdout, stderr, exit code and duration.
+- Stop execution when an operation fails unless the plan explicitly supports a safe continuation.
+- Record each execution and its final status.
 
-Each event has task ID, sequence number, timestamp, typed payload. Redact secrets before persisting.
+## 5. Error recovery
+
+1. Detect a failed build or failed server startup.
+2. Capture a bounded error log and relevant source files.
+3. Ask Gemini for a repair plan using the same structured contract.
+4. Validate the repair plan.
+5. Apply the repair inside the same sandbox.
+6. Run the check again.
+7. Retry at most two times initially.
+8. If still failing, mark the execution as failed and show a useful error summary to the user.
+
+Do not let the model repeatedly retry without a limit. Do not automatically repair arbitrary runtime behavior without a reproducible error signal.
+
+## 6. Preview readiness
+
+- Start Vite with host `0.0.0.0` and a known port such as `5173`.
+- Run it as a background process using the E2B command API.
+- Poll a health/readiness URL with a timeout.
+- Obtain the external URL through the E2B SDK's port-host method.
+- Return the URL only after the server is ready.
+- Treat the preview URL as temporary unless the provider documents otherwise.
+
+## 7. Suggested execution statuses
+
+`queued` → `planning` → `executing` → `checking` → `ready`
+
+Failure states: `failed`, `cancelled`.
+
+For the first version, these statuses are persisted in PostgreSQL and returned through ordinary API polling. A queue system is not required.

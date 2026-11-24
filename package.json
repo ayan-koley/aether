@@ -1,0 +1,33 @@
+{
+  "name": "aether",
+  "version": "1.0.0",
+  "description": "autonomous agent",
+  "keywords": [
+    "agent"
+  ],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "homepage": "https://github.com/ayan-koley/aether#readme",
+  "bugs": {
+    "url": "https://github.com/ayan-koley/aether/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayan-koley/aether.git"
+  },
+  "license": "ISC",
+  "author": "ayan",
+  "type": "module",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

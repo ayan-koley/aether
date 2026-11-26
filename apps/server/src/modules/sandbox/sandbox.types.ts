@@ -4,5 +4,5 @@ export type SandboxInstance = Sandbox;
 
 export type SandboxFile = {
     path: string;
-    content: string;
+    content: string | Buffer;
 }

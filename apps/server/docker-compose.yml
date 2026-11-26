@@ -1,0 +1,10 @@
+services:
+  db:
+    image: postgres
+    container_name: aether-db
+    environment:
+      POSTGRES_PASSWORD: aether
+      POSTGRES_DB: aether
+      POSTGRES_USER: aether
+    ports:
+      - "5432:5432"

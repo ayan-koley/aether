@@ -11,13 +11,19 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
+    "prisma": "^7.10.1",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.125",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "@vercel/sandbox": "^4.1.0",
     "ai": "^7.0.181",
     "dotenv": "^18.0.10",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
   }
 }

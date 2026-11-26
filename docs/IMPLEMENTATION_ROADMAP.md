@@ -28,18 +28,18 @@ Build and verify one milestone at a time. Do not start the next milestone until 
 
 ## Milestone 3 — Sandbox manager and execution engine
 
-- [ ] Implement sandbox create/get/pause/destroy operations.
-- [ ] Implement safe file read/write operations.
-- [ ] Implement bounded command execution and log capture.
-- [ ] Implement project-root path validation.
-- [ ] Implement dependency installation with limits.
-- [ ] Save sandbox ID and project status.
+- [ done ] Implement sandbox create/get/pause/destroy operations.
+- [ done ] Implement safe file read/write operations.
+- [ done ] Implement bounded command execution and log capture.
+- [ done ] Implement project-root path validation.
+- [ done ] Implement dependency installation with limits.
+- [ done ] Save sandbox ID and project status.
 
 **Done when:** The backend can create, edit and run a website without Gemini.
 
 ## Milestone 4 — Gemini integration
 
-- [ ] Install `@google/genai`.
+- [ ] Install vercel ai sdk with gemini provider.
 - [ ] Keep the Gemini API key on the backend.
 - [ ] Define a versioned JSON plan schema with Zod.
 - [ ] Add prompt construction and project context selection.

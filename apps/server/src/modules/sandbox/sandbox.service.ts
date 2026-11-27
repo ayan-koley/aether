@@ -68,4 +68,9 @@ export class SandboxService {
     async createDirectory(sandbox: SandboxInstance, directoryPath: string) {
         return sandbox.mkDir(directoryPath);
     }
+
+    async deleteFile(sandbox: SandboxInstance, filePath: string) {
+        await sandbox.fs.unlink(filePath);
+    }
 }
+//
